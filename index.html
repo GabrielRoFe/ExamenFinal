@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>three.js webgl - FBX loader</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+        body { margin: 0; }
+        .move-info { position: absolute; top: 10px; left: 10px; color: white; font-family: Arial, sans-serif; }
+        .slider { position: absolute; top: 10px; right: 10px; }
+        .light-slider { position: absolute; top: 50px; right: 10px; } /* Nueva posición para la barra de iluminación */
+    </style>
+</head>
+<body>
+<div id="moveInfo" class="move-info">
+    <p>1= Punching<br>
+    2= Mma Kick<br>
+    3= Taunt<br>
+    4= Defeated<br>
+    5= Unarmed Walk Forward<br>
+    6= Standing Run Forward<br>
+    7= Unarmed Jump</p>
+</div>
+<script type="importmap">
+    {
+        "imports": {
+            "three": "./build/three.module.js",
+            "three/addons/": "./jsm/"
+        }
+    }
+</script>
+<script type="module">
+    // Importación de las dependencias necesarias de three.js
+    import * as THREE from './build/three.module.js'; // Cambia la ruta según la ubicación de tu three.module.js
+
+    import Stats from './jsm/libs/stats.module.js';
+    import { OrbitControls } from './jsm/controls/OrbitControls.js';
+    import { FBXLoader } from './jsm/loaders/FBXLoader.js';
+
+    // Declaración de variables globales
+    let camera, scene, renderer, stats, object, loader, mixer;
+    const clock = new THREE.Clock();
+    const step = 50; // La distancia que el personaje se mueve con cada pulsación de tecla
+    const cameraStep = 20; // Velocidad de movimiento de la cámara
+    let characterPosition = new THREE.Vector3(); // Variable para almacenar la posición del personaje
+
+    // Parámetros para la interfaz gráfica
+    const params = {
+        asset: 'Unarmed Walk Forward (1)'
+    };
+
+    // Lista de activos disponibles
+    const assets = [
+        'Punching',                 // golpe
+        'Mma Kick',                 // patada
+        'Taunt',                    // provocacion   
+        'Defeated',                 // derrotado
+        'Unarmed Walk Forward (1)', // caminar      
+        'Standing Run Forward (1)', // correr
+        'Unarmed Jump'              // saltar
+    ];
+
+    // Inicialización de la escena
+    init();
+    
+    function init() {
+        // Creación del contenedor y configuración de la cámara
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+
+        camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 2000);
+        camera.position.set(100, 200, 300);
+
+        // Configuración de la escena incluyendo la niebla
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xa0a0a0);
+        const initialFogDistance = 1000;  // Valor inicial de la niebla
+        scene.fog = new THREE.Fog(0xa0a0a0, initialFogDistance * 0.5, initialFogDistance); // Ajustar la niebla inicial
+
+        // Configuración de la iluminación
+        const hemiLight = new THREE.HemisphereLight('red', 'white', 5);
+        hemiLight.position.set(0, 200, 0);
+        scene.add(hemiLight);
+
+        const dirLight = new THREE.DirectionalLight('red', 5);
+        dirLight.position.set(0, 200, 100);
+        dirLight.castShadow = true;
+        dirLight.shadow.camera.top = 180;
+        dirLight.shadow.camera.bottom = -100;
+        dirLight.shadow.camera.left = -120;
+        dirLight.shadow.camera.right = 120;
+        scene.add(dirLight);
+
+        // Añadir suelo
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.MeshPhongMaterial({ color: 0x000000, depthWrite: false }));
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // Configuración del cargador FBX
+        loader = new FBXLoader();
+        loadAsset(params.asset);
+
+        // Configuración del renderizador
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setAnimationLoop(animate);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // Configuración de los controles de órbita
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 100, 0);
+        controls.update();
+
+        // Añadir evento para ajustar el tamaño de la ventana
+        window.addEventListener('resize', onWindowResize);
+
+        // Añadir evento para las teclas numéricas del 1 al 7
+        document.addEventListener('keydown', onKeyDown);
+
+        // Añadir evento para las teclas de movimiento
+        document.addEventListener('keydown', onMovementKeyDown);
+        
+        // Añadir evento para las teclas de movimiento de la cámara
+        document.addEventListener('keydown', onCameraMoveKeyDown);
+
+        // Configuración de las estadísticas
+        stats = new Stats();
+        container.appendChild(stats.dom);
+
+        // Añadir la barra deslizante para controlar la niebla
+        const fogControl = document.createElement('input');
+        fogControl.type = 'range';
+        fogControl.min = '300';
+        fogControl.max = '1500';
+        fogControl.value = initialFogDistance.toString();
+        fogControl.className = 'slider';
+        fogControl.id = 'fogRange';
+        container.appendChild(fogControl);
+
+        // Añadir evento para cambiar la niebla según el valor de la barra
+        fogControl.addEventListener('input', function() {
+            const fogDistance = parseInt(this.value);
+            scene.fog.far = fogDistance;
+            scene.fog.near = fogDistance * 0.5; // Opcional: ajustar la niebla cercana si es necesario
+            renderer.render(scene, camera);
+        });
+
+        // Añadir la barra deslizante para controlar la intensidad de la iluminación
+        const lightIntensityControl = document.createElement('input');
+        lightIntensityControl.type = 'range';
+        lightIntensityControl.min = '0';
+        lightIntensityControl.max = '10';
+        lightIntensityControl.value = '5'; // Valor inicial de la intensidad de la iluminación
+        lightIntensityControl.step = '0.1';
+        lightIntensityControl.className = 'light-slider'; // Clase modificada para el estilo de la barra de iluminación
+        lightIntensityControl.id = 'lightIntensityRange';
+        container.appendChild(lightIntensityControl); // Añadir la barra de iluminación al final del contenedor
+
+        // Añadir evento para cambiar la intensidad de la iluminación según el valor de la barra
+        lightIntensityControl.addEventListener('input', function() {
+            const intensity = parseFloat(this.value);
+            // Ajusta la intensidad de la luz hemisférica
+            hemiLight.intensity = intensity;
+            // Ajusta la intensidad de la luz direccional
+            dirLight.intensity = intensity;
+            renderer.render(scene, camera);
+        });
+
+        // Crear geometría y material para los conos
+        const geometry = new THREE.ConeGeometry(20, 200, 365, 1);
+        const blueMaterial = new THREE.MeshPhongMaterial({ color: 0x4169E1, flatShading: true });
+        const redMaterial = new THREE.MeshPhongMaterial({ color: 0xFF0000, flatShading: true });
+        const coneHeight = 200; // Altura del cono, ajusta según tu necesidad
+        const characterBaseHeight = 100; // Asume que esta es la altura base del personaje, ajusta según tu modelo
+
+        // Array para almacenar los conos
+        const cones = [];
+
+        // Iterar para crear los conos
+        for (let i = 0; i < 150; i++) {
+            const mesh = new THREE.Mesh(geometry, blueMaterial); // Comienza con material azul por defecto
+
+            // Decidir aleatoriamente si el cono será rojo
+            if (Math.random() < 0.5) { // Por ejemplo, 50% de probabilidad de ser rojo
+                mesh.material = redMaterial;
+            }
+
+            // Habilitar sombras para los conos
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+
+            // Posicionar el cono de manera aleatoria en el escenario
+            mesh.position.x = Math.random() * 1600 - 800;
+            mesh.position.y = characterBaseHeight; // Asegurar que el cono esté al mismo nivel que el personaje
+            mesh.position.z = Math.random() * 1600 - 800;
+
+            mesh.updateMatrix();
+            mesh.matrixAutoUpdate = false;
+
+            scene.add(mesh);
+            cones.push(mesh);
+        }
+
+        // Función para cargar un activo FBX
+        function loadAsset(asset) {
+            loader.load('models/fbx/' + asset + '.fbx', function (group) {
+                if (object) {
+                    // Liberar recursos del objeto anterior
+                    object.traverse(function (child) {
+                        if (child.material) child.material.dispose();
+                        if (child.material && child.material.map) child.material.map.dispose();
+                        if (child.geometry) child.geometry.dispose();
+                    });
+                    scene.remove(object);
+                }
+
+                object = group;
+
+                // Configuración de la animación
+                if (object.animations && object.animations.length) {
+                    mixer = new THREE.AnimationMixer(object);
+                    const action = mixer.clipAction(object.animations[0]);
+                    action.play();
+                } else {
+                    mixer = null;
+                }
+
+                // Color del personaje
+                object.traverse(function (child) {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        child.material = new THREE.MeshPhongMaterial({ color: 0x4169E1 });
+                    }
+                });
+
+                object.position.copy(characterPosition); // Establecer la posición del nuevo objeto
+
+                scene.add(object);
+                console.log("Modelo cargado: ", object); // Log para verificar la carga
+            });
+        }
+
+        // Función de animación
+        function animate() {
+            const delta = clock.getDelta();
+            if (mixer) mixer.update(delta);
+            renderer.render(scene, camera);
+            stats.update();
+            checkCollisions();
+        }
+
+        // Función para controlar el tamaño de la ventana
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Función para controlar las teclas numéricas
+        function onKeyDown(event) {
+            switch (event.keyCode) {
+                case 49: // Tecla 1
+                    loadAsset('Punching');
+                    break;
+                case 50: // Tecla 2
+                    loadAsset('Mma Kick');
+                    break;
+                case 51: // Tecla 3
+                    loadAsset('Taunt');
+                    break;
+                case 52: // Tecla 4
+                    loadAsset('Defeated');
+                    break;
+                case 53: // Tecla 5
+                    loadAsset('Unarmed Walk Forward (1)');
+                    break;
+                case 54: // Tecla 6
+                    loadAsset('Standing Run Forward (1)');
+                    break;
+                case 55: // Tecla 7
+                    loadAsset('Unarmed Jump');
+                    break;
+            }
+        }
+
+        // Función para controlar las teclas de movimiento del personaje
+        function onMovementKeyDown(event) {
+            if (!object) return;
+
+            // Obtener la dirección de la cámara
+            const direction = camera.getWorldDirection(new THREE.Vector3());
+
+            switch (event.keyCode) {
+                case 83: // Tecla S (atrás)
+                    moveBackward(direction);
+                    break;
+                case 65: // Tecla A (izquierda)
+                    moveLeft(direction);
+                    break;
+                case 68: // Tecla D (derecha)
+                    moveRight(direction);
+                    break;
+            }
+        }
+
+        // Función para mover hacia atrás
+        function moveBackward(direction) {
+            object.translateZ(step);
+            characterPosition.copy(object.position);
+        }
+
+        // Función para mover a la izquierda
+        function moveLeft(direction) {
+            object.rotateY(Math.PI / 2);
+            object.translateZ(-step);
+            characterPosition.copy(object.position);
+        }
+
+        // Función para mover a la derecha
+        function moveRight(direction) {
+            object.rotateY(-Math.PI / 2);
+            object.translateZ(-step);
+            characterPosition.copy(object.position);
+        }
+
+        // Función para controlar las teclas de movimiento de la cámara
+        function onCameraMoveKeyDown(event) {
+            // Obtener la dirección de la cámara
+            const direction = new THREE.Vector3();
+            camera.getWorldDirection(direction);
+
+            switch (event.keyCode) {
+                case 38: // Tecla de flecha arriba (mueve la cámara hacia adelante)
+                    camera.position.addScaledVector(direction, cameraStep);
+                    break;
+                    case 40: // Tecla de flecha abajo (mueve la cámara hacia atrás)
+                    camera.position.addScaledVector(direction, -cameraStep);
+                    break;
+                case 37: // Tecla de flecha izquierda (mueve la cámara hacia la izquierda)
+                    const left = new THREE.Vector3().crossVectors(camera.up, direction).normalize();
+                    camera.position.addScaledVector(left, cameraStep);
+                    break;
+                case 39: // Tecla de flecha derecha (mueve la cámara hacia la derecha)
+                    const right = new THREE.Vector3().crossVectors(direction, camera.up).normalize();
+                    camera.position.addScaledVector(right, cameraStep);
+                    break;
+            }
+            camera.updateProjectionMatrix();
+        }
+
+        // Función para detectar colisiones con los conos
+        function checkCollisions() {
+            if (!object) return;
+            const characterBox = new THREE.Box3().setFromObject(object);
+            
+            cones.forEach(cone => {
+                const coneBox = new THREE.Box3().setFromObject(cone);
+                const collision = characterBox.intersectsBox(coneBox);
+
+                if (collision) {
+                    console.log('¡Colisión detectada con un cono!');
+                    // Aquí podrías agregar cualquier lógica adicional al detectar una colisión
+                }
+            });
+        }
+
+        // Función para limpiar recursos antes de cerrar la página
+        function cleanUp() {
+            renderer.dispose();
+            scene.dispose();
+        }
+
+        // Evento para limpiar recursos antes de cerrar la página
+        window.addEventListener('beforeunload', cleanUp);
+
+        // Iniciar la animación
+        animate();
+    }
+    </script>
+    </body>
+</html>
